@@ -1,15 +1,16 @@
 from grammaropt.grammar import build_grammar
+from grammaropt.types import Int
 rules = r"""
 svg = elements
 elements = (element "\n" elements) / element
-element = atom
+element = atom 
 atom = path
 rect = "<rect " x s y s w s h s st"/>\n"
 line = "<line " x1 s y1 s x2 s y2 s st "/>\n"
-path = "<path d=\"" "M" s int s int s "C" s int s int "," int s int "," int s int "\"" s fill s stroke  "/>\n"
+path = "<path d=\"" "M" s int s int s "C" s int s int "," int s int "," int s int "\"" s fill s stroke s stroke_width  "/>\n"
 fill = "fill=\"transparent\""
 stroke = "stroke=\"black\""
-stroke_width = "stroke-width=\"" ("1"/"2"/"3"/"4") "\""
+stroke_width = "stroke-width=\"" ("1" / "2" / "3"/ "4" / "5" / "6") "\""
 x = "x=" qint
 y = "y=" qint
 w = "width=" qint
@@ -23,8 +24,10 @@ pint = int "%"
 q = "\""
 s = " "
 st = "style=\"stroke:rgb(255,0,0);stroke-width:2\""
-int = "0" / "5" / "10" / "15" / "20" / "25" / "30" / "35"/ "40" /  "45" / "50" / "55" / "60" / "65" / "70" /  "75" / "80" /  "85" / "90" / "95" / "100"
 group = "<svg " vb s x s y s w s h ">\n"   element "\n" elements "</svg>\n"
 vb = "viewbox=\" 0 0 100 100\""
+int =  "100" / "10" / "15" / "20" / "25" / "30" / "35"/ "40" /  "45" / "50" / "55" / "60" / "65" / "70" /  "75" / "80" /  "85" / "90" / "95" / "0" / "5"
 """
-svg = build_grammar(rules)
+#types = {'int': Int(0, 100)}
+types = {}
+svg = build_grammar(rules, types=types)
