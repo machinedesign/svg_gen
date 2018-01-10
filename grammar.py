@@ -29,3 +29,14 @@ int =  "100" / "10" / "15" / "20" / "25" / "30" / "35"/ "40" /  "45" / "50" / "5
 """
 types = {}
 svg = build_grammar(rules, types=types)
+
+template = """<?xml version="1.0" standalone="no"?>
+<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{w}\" height=\"{h}\">
+{content}
+</svg>
+"""
+
+W_real, H_real = 64, 64
+W, H = 64, 64
+min_depth = 1
+max_depth = 3
