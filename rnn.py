@@ -11,20 +11,30 @@ class Sim(nn.Module):
         self.img_size = img_size
         self.emb = nn.Embedding(vocab_size, emb_size)
         self.rnn = nn.LSTM(emb_size, hidden_size, batch_first=True, num_layers=num_layers)
-        self.out_img = nn.Linear(hidden_size, img_size * img_size)
+        self.enc = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+        )
+        self.out_img = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(hidden_size, img_size * img_size)
+        )
     
     def forward(self, inp):
         x = self.emb(inp)
         o, _ = self.rnn(x)
         o = o[:, -1, :]
         o = o.contiguous()
-        o = self.out_img(o)
-        return o
+        h = self.enc(o)
+        o = self.out_img(h)
+        return o, h
 
 
 class Model(nn.Module):
 
-    def __init__(self, img_size=64, input_size=32, input_repr_size=200, vocab_size=10, emb_size=128, hidden_size=128, num_layers=1, nb_features=1, use_cuda=False):
+    def __init__(self, img_size=64, input_size=32, input_repr_size=200, vocab_size=10, emb_size=128, 
+                 hidden_size=128, num_layers=1, nb_features=1, use_cuda=False):
         super().__init__()   
         self.vocab_size = vocab_size
         self.emb_size = emb_size
@@ -67,7 +77,7 @@ class Model(nn.Module):
         o = self.out_token(o)
         h = h[-1]
         xrec = self.input_recons(h)
-        return o, xrec
+        return o, c0, xrec
 
     def get_img_repr(self):
         img = self.X

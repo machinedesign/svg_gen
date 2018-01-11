@@ -280,6 +280,181 @@ def fit_simulator(*, folder='results', resume=False):
             nupdates += 1
         torch.save(model, '{}/sim.th'.format(folder))
 
+def fit_all(*, folder='results', resume=False):
+    grammar = svg
+    vect = Vectorizer(svg)
+    vect._init()
+    
+    # Hypers
+    vocab_size = len(vect.tok_to_id)
+    emb_size = 128
+    hidden_size = 256
+    lr = 0.001
+    gamma = 0.9
+    input_repr_size = 128
+    use_cuda = True
+    batch_size = 64
+    epochs = 2000
+
+    # Model
+    if resume:
+        model = torch.load('{}/model.th'.format(folder))
+        sim = torch.load('{}/sim.th'.format(folder))
+        vect = model.vect
+        grammar = model.grammar
+    else:
+        model = Model(
+            input_size=W*H,
+            input_repr_size=input_repr_size,
+            vocab_size=vocab_size, 
+            emb_size=emb_size, 
+            hidden_size=hidden_size, 
+            num_layers=2,
+            use_cuda=use_cuda
+        )
+        model.vect = vect
+        model.grammar = svg
+        model.apply(partial(weights_init, ih_std=0.08, hh_std=0.08))
+
+        sim = Sim(
+            img_size=W,
+            vocab_size=vocab_size, 
+            emb_size=emb_size, 
+            hidden_size=hidden_size, 
+            num_layers=2,
+        )
+        sim.vect = vect
+        sim.grammar = svg
+        sim.apply(partial(weights_init, ih_std=0.08, hh_std=0.08))
+
+    if use_cuda:
+        model = model.cuda()
+        sim = sim.cuda()
+
+    rnn = RnnAdapter(model, tok_to_id=vect.tok_to_id, begin_tok=NULL_SYMBOL)
+    wl = RnnWalker(grammar=grammar, 
+                   rnn=rnn, 
+                   min_depth=min_depth, max_depth=max_depth, 
+                   temperature=1)
+    optim = torch.optim.Adam(list(model.parameters()) + list(sim.parameters()), lr=lr) 
+
+    # Data
+    data = np.load('data/train/data.npz')
+    E = data['E']
+    X = 1.0 - data['X']
+    X = np.array(X)
+
+    E = vect.transform(E)
+    E = [[0] + expr for expr in E]
+    E = np.array(E).astype('int32')
+
+    nb = 1000
+    E = E[0:nb]
+    X = X[0:nb]
+
+    # Training
+    I = E[:, 0:-1]
+    O = E[:, 1:]
+    crit = nn.CrossEntropyLoss()
+    avg_loss = 0.
+    avg_precision = 0.
+    avg_loss = 0.
+    avg_recons = 0.
+    nupdates = 0
+    stats = []
+    for i in range(epochs):
+        for j in range(0, len(I), batch_size):
+            inp = I[j:j+batch_size]
+            out = O[j:j+batch_size]
+            x = X[j:j + batch_size]
+
+            out = out.flatten()
+            inp = torch.from_numpy(inp).long()
+            inp = Variable(inp)
+            out = torch.from_numpy(out).long()
+            out = Variable(out)
+            
+            x = torch.from_numpy(x)
+            x =  x.view(x.size(0), -1)
+            x = Variable(x)
+            
+            if use_cuda:
+                inp = inp.cuda()
+                out = out.cuda()
+                x = x.cuda()
+
+            model.zero_grad()
+            sim.zero_grad()
+
+            model.given(x)
+            y, hmodel, xrec = model(inp)
+            ysim, hsim = sim(inp)
+            code_loss = crit(y, out)
+            recons_loss = ((ysim - x) ** 2).mean()
+            embed_loss = ((hsim - hmodel) ** 2).mean()
+            loss = code_loss + recons_loss + embed_loss
+            precision = acc(y, out)
+            loss.backward(retain_graph=True)
+
+            ind_np = np.arange(len(inp))
+            np.random.shuffle(ind_np)
+            ind = torch.from_numpy(ind_np)
+
+            ind_np = np.arange(len(inp))
+            np.random.shuffle(ind_np)
+            ind_sim = torch.from_numpy(ind_np)
+            if use_cuda:
+                ind = ind.cuda()
+                ind_sim = ind_sim.cuda()
+            _, hmodel, _ = model(inp[ind])
+            _, hsim = sim(inp[ind_sim])
+            embed_loss = -torch.clamp(((hsim - hmodel) ** 2).mean(1), 0, 1).mean()
+            embed_loss.backward()
+            optim.step()
+
+            avg_loss = avg_loss * gamma + loss.data[0] * (1 - gamma)
+            avg_precision = avg_precision * gamma + precision.data[0] * (1 - gamma)
+            avg_recons = avg_recons * gamma + recons_loss.data[0] *  (1 - gamma)
+            stats.append({
+                'loss': loss.data[0], 
+                'precision': precision.data[0], 
+                'recons': code_loss.data[0]
+            })
+            if nupdates % 10 == 0:
+                pd.DataFrame(stats).to_csv(os.path.join(folder, 'stats.csv'))
+                print('Epoch : {:05d} Avg loss : {:.6f} Avg Precision : {:.6f} '
+                      'Avg recons : {:.6f}'.format(i, avg_loss, avg_precision, avg_recons))
+                predims = ysim.data.cpu().numpy()
+                predims = predims.reshape((predims.shape[0], H, W))
+                for idx in range(j, min(j + 30, len(X))):
+                    x = X[idx:idx+1]
+                    trueim = x[0]
+                    sim_predim = predims[idx - j]
+                    x = torch.from_numpy(x)
+                    x = x.view(x.size(0), -1)
+                    x = Variable(x)
+                    if use_cuda:
+                        x = x.cuda()
+                    model.given(x)
+                    try:
+                        wl.walk()
+                    except Exception as ex:
+                        print(ex)
+                        continue
+                    expr = as_str(wl.terminals)
+                    predim = from_svg(expr)
+                    predim = 1.0 - predim
+                    im = grid_of_images_default(
+                        np.array([trueim, predim, sim_predim]), 
+                        shape=(3, 1)
+                    )
+                    imsave(os.path.join(folder, 'example{:02d}.png'.format(idx - j)), im)
+            nupdates += 1
+        
+        torch.save(model, '{}/model.th'.format(folder))
+        torch.save(sim, '{}/sim.th'.format(folder))
+        model.apply(partial(save_weights, folder=folder))
+
 def evaluate(*, filename='results/model.th'):
     use_cuda = True
     batch_size = 64
@@ -430,4 +605,4 @@ def make_letters():
 
 
 if __name__ == '__main__':
-    run([prior, fit, make_letters, search_letters, evaluate, evaluate_letters, fit_simulator])
+    run([prior, fit, make_letters, search_letters, evaluate, evaluate_letters, fit_simulator, fit_all])
